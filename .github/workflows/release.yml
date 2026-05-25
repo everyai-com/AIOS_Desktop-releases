@@ -172,6 +172,14 @@ jobs:
         working-directory: source
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Windows Authenticode signing — uses separate secrets from Mac
+          # (CSC_LINK on Mac = .p12 Developer ID cert; WIN_CSC_LINK = .pfx
+          # Windows Code Signing cert). When absent, electron-builder produces
+          # an unsigned .exe and Windows shows the SmartScreen warning.
+          # Set WIN_CSC_LINK + WIN_CSC_KEY_PASSWORD as repo secrets once a
+          # cert is purchased — no workflow change needed at that point.
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
         run: npm run release:no-python -- --win
 
       - name: Build + publish (macOS arm64)
