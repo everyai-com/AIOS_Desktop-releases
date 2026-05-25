@@ -182,7 +182,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-        run: npm run release:no-python -- --win --publish always
+        # Don't go through `npm run release:no-python` — its embedded
+        # `--publish always` collides with the appended `--publish always`
+        # and electron-builder skips publishing ("not always"). Call the
+        # CLI directly with a single --publish flag.
+        run: |
+          npm run build
+          npx electron-builder --win --publish always
 
       - name: Publish (macOS arm64)
         if: matrix.platform == 'mac' && matrix.arch == 'arm64'
@@ -194,7 +200,9 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npm run release:no-python -- --mac --arm64 --publish always
+        run: |
+          npm run build
+          npx electron-builder --mac --arm64 --publish always
 
       - name: Publish (macOS x64 / Intel)
         if: matrix.platform == 'mac' && matrix.arch == 'x64'
@@ -206,7 +214,9 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npm run release:no-python -- --mac --x64 --publish always
+        run: |
+          npm run build
+          npx electron-builder --mac --x64 --publish always
 
       - name: Upload installer artifacts (debugging)
         if: always()
