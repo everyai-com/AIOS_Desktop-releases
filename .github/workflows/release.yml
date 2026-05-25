@@ -174,12 +174,22 @@ jobs:
       # users see them. See AIOS_Desktop_Verifier for the harness.
       # ─────────────────────────────────────────────────────────────────
 
+      # NOTE: the `release:no-python` npm script ends in `electron-builder
+      # --publish always`, so `npm run ... -- --publish never` produces
+      # `--publish always --publish never`. yargs uses the last value
+      # (never) for the CLI flag, but electron-builder still constructs
+      # GitHubPublisher during the post-build cleanup and crashes if
+      # GH_TOKEN is missing. Passing GH_TOKEN here is a no-op for
+      # publishing (--publish never wins) but satisfies the publisher
+      # constructor so the step doesn't crash. Real publish happens
+      # later in the explicit publish step.
       - name: Build (no publish, Windows)
         if: matrix.platform == 'win'
         working-directory: source
         env:
           CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run release:no-python -- --win --publish never
 
       - name: Build (no publish, macOS arm64)
@@ -191,6 +201,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run release:no-python -- --mac --arm64 --publish never
 
       - name: Build (no publish, macOS x64 / Intel)
@@ -202,6 +213,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run release:no-python -- --mac --x64 --publish never
 
       # ─────────────────────────────────────────────────────────────────
