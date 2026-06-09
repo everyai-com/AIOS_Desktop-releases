@@ -213,7 +213,9 @@ jobs:
           CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
         run: |
           npm run build
-          npx electron-builder --win --publish always
+          PRERELEASE=""
+          case "${{ steps.tag.outputs.tag }}" in *-beta*|*-rc*|*-alpha*) PRERELEASE="-c.publish.releaseType=prerelease" ;; esac
+          npx electron-builder --win --publish always $PRERELEASE
 
       - name: Publish (macOS arm64)
         if: matrix.platform == 'mac' && matrix.arch == 'arm64'
@@ -227,7 +229,9 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           npm run build
-          npx electron-builder --mac --arm64 --publish always
+          PRERELEASE=""
+          case "${{ steps.tag.outputs.tag }}" in *-beta*|*-rc*|*-alpha*) PRERELEASE="-c.publish.releaseType=prerelease" ;; esac
+          npx electron-builder --mac --arm64 --publish always $PRERELEASE
 
       - name: Publish (macOS x64 / Intel)
         if: matrix.platform == 'mac' && matrix.arch == 'x64'
@@ -241,7 +245,9 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           npm run build
-          npx electron-builder --mac --x64 --publish always
+          PRERELEASE=""
+          case "${{ steps.tag.outputs.tag }}" in *-beta*|*-rc*|*-alpha*) PRERELEASE="-c.publish.releaseType=prerelease" ;; esac
+          npx electron-builder --mac --x64 --publish always $PRERELEASE
 
       - name: Upload installer artifacts (debugging)
         if: always()
