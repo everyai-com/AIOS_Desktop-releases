@@ -42,6 +42,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
+          PRERELEASE_FLAG=""
+          case "$TAG" in *-beta*|*-rc*|*-alpha*) PRERELEASE_FLAG="--prerelease" ;; esac
           if gh release view "$TAG" --repo everyai-com/AIOS_Desktop-releases >/dev/null 2>&1; then
             echo "Release $TAG already exists — skipping create."
           else
@@ -49,8 +51,8 @@ jobs:
               --repo everyai-com/AIOS_Desktop-releases \
               --title "${TAG#v}" \
               --notes "Release ${TAG#v}" \
-              --draft=false
-            echo "Created release $TAG"
+              --draft=false $PRERELEASE_FLAG
+            echo "Created release $TAG (prerelease: ${PRERELEASE_FLAG:-no})"
           fi
 
   build:
@@ -295,7 +297,9 @@ jobs:
           ARM64_SIZE=$(stat -c%s "$ARM64_ZIP")
           INTEL_SIZE=$(stat -c%s "$INTEL_ZIP")
           RELEASE_DATE="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
-          cat > latest-mac.yml <<EOF
+          MANIFEST="latest-mac.yml"
+          case "$TAG" in *-beta*|*-rc*|*-alpha*) MANIFEST="beta-mac.yml" ;; esac
+          cat > "$MANIFEST" <<EOF
           version: ${VERSION}
           files:
             - url: ${ARM64_ZIP}
@@ -308,6 +312,6 @@ jobs:
           sha512: ${ARM64_HASH}
           releaseDate: '${RELEASE_DATE}'
           EOF
-          echo "--- merged latest-mac.yml ---"
-          cat latest-mac.yml
-          gh release upload "$TAG" latest-mac.yml --clobber --repo "$REPO"
+          echo "--- merged $MANIFEST ---"
+          cat "$MANIFEST"
+          gh release upload "$TAG" "$MANIFEST" --clobber --repo "$REPO"
