@@ -207,6 +207,7 @@ jobs:
       - name: Publish (Windows)
         if: matrix.platform == 'win'
         working-directory: source
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
@@ -214,12 +215,13 @@ jobs:
         run: |
           npm run build
           PRERELEASE=""
-          case "${{ steps.tag.outputs.tag }}" in *-beta*|*-rc*|*-alpha*) PRERELEASE="-c.publish.releaseType=prerelease" ;; esac
+          case "${{ steps.tag.outputs.tag }}" in *-beta*|*-rc*|*-alpha*) PRERELEASE="-c.publish.releaseType=prerelease -c.publish.channel=beta" ;; esac
           npx electron-builder --win --publish always $PRERELEASE
 
       - name: Publish (macOS arm64)
         if: matrix.platform == 'mac' && matrix.arch == 'arm64'
         working-directory: source
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -230,12 +232,13 @@ jobs:
         run: |
           npm run build
           PRERELEASE=""
-          case "${{ steps.tag.outputs.tag }}" in *-beta*|*-rc*|*-alpha*) PRERELEASE="-c.publish.releaseType=prerelease" ;; esac
+          case "${{ steps.tag.outputs.tag }}" in *-beta*|*-rc*|*-alpha*) PRERELEASE="-c.publish.releaseType=prerelease -c.publish.channel=beta" ;; esac
           npx electron-builder --mac --arm64 --publish always $PRERELEASE
 
       - name: Publish (macOS x64 / Intel)
         if: matrix.platform == 'mac' && matrix.arch == 'x64'
         working-directory: source
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -246,7 +249,7 @@ jobs:
         run: |
           npm run build
           PRERELEASE=""
-          case "${{ steps.tag.outputs.tag }}" in *-beta*|*-rc*|*-alpha*) PRERELEASE="-c.publish.releaseType=prerelease" ;; esac
+          case "${{ steps.tag.outputs.tag }}" in *-beta*|*-rc*|*-alpha*) PRERELEASE="-c.publish.releaseType=prerelease -c.publish.channel=beta" ;; esac
           npx electron-builder --mac --x64 --publish always $PRERELEASE
 
       - name: Upload installer artifacts (debugging)
