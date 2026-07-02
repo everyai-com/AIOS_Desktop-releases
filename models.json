@@ -3,6 +3,7 @@
     { "id": "haiku", "mode": "Light", "label": "Haiku 4.5", "description": "Fast · quick questions and small edits" },
     { "id": "sonnet", "mode": "Balanced", "label": "Sonnet 4.6", "description": "The everyday default — speed and depth" },
     { "id": "opus", "mode": "Thinking", "label": "Opus 4.8", "description": "Deepest reasoning · best for complex work" },
+    { "id": "claude-fable-5", "mode": "Max", "label": "Fable 5", "description": "Anthropic's most capable model · hardest problems, uses the most credits" },
     { "id": "default", "mode": "Auto", "label": "CLI default", "description": "Use whatever your Claude CLI is set to" }
   ]
 }
