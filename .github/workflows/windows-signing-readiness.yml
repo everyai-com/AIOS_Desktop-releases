@@ -1,0 +1,108 @@
+name: Windows signing readiness
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-signing-readiness
+  cancel-in-progress: false
+
+jobs:
+  esigner:
+    name: Sign and verify a disposable probe
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout trusted release infrastructure
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+
+      - name: Require the eSigner configuration
+        id: windows-signing-mode
+        shell: bash
+        env:
+          ES_USERNAME: ${{ secrets.ES_USERNAME }}
+          ES_PASSWORD: ${{ secrets.ES_PASSWORD }}
+          ES_TOTP_SECRET: ${{ secrets.ES_TOTP_SECRET }}
+          ES_PUBLISHER_NAME: ${{ vars.ES_PUBLISHER_NAME }}
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_CODE_SIGNING_ENDPOINT: ${{ vars.AZURE_CODE_SIGNING_ENDPOINT }}
+          AZURE_CERTIFICATE_PROFILE_NAME: ${{ vars.AZURE_CERTIFICATE_PROFILE_NAME }}
+          AZURE_CODE_SIGNING_ACCOUNT_NAME: ${{ vars.AZURE_CODE_SIGNING_ACCOUNT_NAME }}
+          AZURE_PUBLISHER_NAME: ${{ vars.AZURE_PUBLISHER_NAME }}
+        run: ./scripts/select-windows-signing-mode.sh
+
+      - name: Enforce the eSigner readiness lane
+        shell: bash
+        env:
+          SIGNING_MODE: ${{ steps.windows-signing-mode.outputs.mode }}
+        run: |
+          if [ "$SIGNING_MODE" != "esigner" ]; then
+            echo "::error::This readiness workflow requires SSL.com eSigner as the sole configured mode."
+            exit 1
+          fi
+
+      - name: Load the expected eSigner certificate
+        shell: pwsh
+        env:
+          ES_USERNAME: ${{ secrets.ES_USERNAME }}
+          ES_PASSWORD: ${{ secrets.ES_PASSWORD }}
+          ES_TOTP_SECRET: ${{ secrets.ES_TOTP_SECRET }}
+          ES_PUBLISHER_NAME: ${{ vars.ES_PUBLISHER_NAME }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installDir = Join-Path $env:RUNNER_TEMP "eSignerCKA"
+          $identity = & .\scripts\load-esigner-certificate.ps1 -InstallDir $installDir
+          "ESIGNER_CERT_THUMBPRINT=$($identity.Thumbprint)" >> $env:GITHUB_ENV
+          "ESIGNER_PUBLISHER_DN=$($identity.Subject)" >> $env:GITHUB_ENV
+
+      - name: Sign and verify a disposable executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $probe = Join-Path $env:RUNNER_TEMP "aios-signing-probe.exe"
+          Add-Type -TypeDefinition @"
+          public static class AiosSigningProbe {
+            public static void Main() {}
+          }
+          "@ -Language CSharp -OutputAssembly $probe -OutputType ConsoleApplication
+
+          $signTool = Get-ChildItem `
+            "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if ($null -eq $signTool) {
+            throw "Windows SDK signtool.exe is unavailable"
+          }
+          & $signTool.FullName sign /fd SHA256 /tr http://ts.ssl.com /td SHA256 `
+            /sha1 $env:ESIGNER_CERT_THUMBPRINT $probe | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "eSigner failed to sign the disposable readiness probe"
+          }
+
+          $signature = Get-AuthenticodeSignature -LiteralPath $probe
+          if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+            throw "Readiness probe Authenticode is not trusted: $($signature.Status)"
+          }
+          if ($signature.SignerCertificate.Thumbprint -ne $env:ESIGNER_CERT_THUMBPRINT) {
+            throw "Readiness probe signer does not match the selected certificate"
+          }
+          if ($signature.SignerCertificate.Subject -ne $env:ESIGNER_PUBLISHER_DN) {
+            throw "Readiness probe publisher does not match the selected identity"
+          }
+          if ($null -eq $signature.TimeStamperCertificate) {
+            throw "Readiness probe has no RFC3161 timestamp"
+          }
+
+          Write-Host "Windows signing readiness passed."
+          Write-Host "Publisher: $($signature.SignerCertificate.Subject)"
+          Write-Host "Timestamp: $($signature.TimeStamperCertificate.Subject)"
