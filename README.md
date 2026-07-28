@@ -31,4 +31,22 @@ See [Releases](https://github.com/everyai-com/AIOS_Desktop-releases/releases).
    manifests, public asset names, sizes, and SHA-256 digests
 6. The release becomes public only after every platform gate passes
 
+## Windows signing inputs
+
+The Windows build accepts exactly one signing mode:
+
+- **Azure Trusted Signing (preferred):** repository secrets
+  `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`; repository
+  variables `AZURE_CODE_SIGNING_ENDPOINT`,
+  `AZURE_CERTIFICATE_PROFILE_NAME`, `AZURE_CODE_SIGNING_ACCOUNT_NAME`, and
+  `AZURE_PUBLISHER_NAME`.
+- **Exportable PFX fallback:** repository secrets `WIN_CSC_LINK` (base64
+  certificate) and `WIN_CSC_KEY_PASSWORD`.
+
+Partial configuration, both modes at once, no signing identity, an untrusted
+signature, a missing timestamp, mixed publisher certificates, or a manifest
+hash mismatch all fail before Windows artifacts are uploaded. The build also
+sets electron-builder's `forceCodeSigning` gate, so signing failure stops
+packaging before the independent PowerShell checks run.
+
 See [.github/workflows/release.yml](.github/workflows/release.yml) for the build orchestration.

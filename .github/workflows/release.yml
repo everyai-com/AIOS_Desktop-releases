@@ -211,26 +211,78 @@ jobs:
       # empty, so publication must happen only after PowerShell proves that the
       # final PE files carry one trusted, timestamped Authenticode identity.
       - name: Build Windows installers without publishing
+        id: windows-build
         if: matrix.platform == 'win'
         working-directory: source
         shell: bash
         env:
           CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_CODE_SIGNING_ENDPOINT: ${{ vars.AZURE_CODE_SIGNING_ENDPOINT }}
+          AZURE_CERTIFICATE_PROFILE_NAME: ${{ vars.AZURE_CERTIFICATE_PROFILE_NAME }}
+          AZURE_CODE_SIGNING_ACCOUNT_NAME: ${{ vars.AZURE_CODE_SIGNING_ACCOUNT_NAME }}
+          AZURE_PUBLISHER_NAME: ${{ vars.AZURE_PUBLISHER_NAME }}
         run: |
           set -euo pipefail
-          test -n "${CSC_LINK:-}" || {
-            echo "::error::WIN_CSC_LINK is required; refusing to build an unsigned public release."
+
+          AZURE_VALUES=(
+            "${AZURE_TENANT_ID:-}"
+            "${AZURE_CLIENT_ID:-}"
+            "${AZURE_CLIENT_SECRET:-}"
+            "${AZURE_CODE_SIGNING_ENDPOINT:-}"
+            "${AZURE_CERTIFICATE_PROFILE_NAME:-}"
+            "${AZURE_CODE_SIGNING_ACCOUNT_NAME:-}"
+            "${AZURE_PUBLISHER_NAME:-}"
+          )
+          AZURE_SET=0
+          for VALUE in "${AZURE_VALUES[@]}"; do
+            if [ -n "$VALUE" ]; then AZURE_SET=$((AZURE_SET + 1)); fi
+          done
+          PFX_SET=0
+          if [ -n "${CSC_LINK:-}" ]; then PFX_SET=$((PFX_SET + 1)); fi
+          if [ -n "${CSC_KEY_PASSWORD:-}" ]; then PFX_SET=$((PFX_SET + 1)); fi
+
+          if [ "$AZURE_SET" -ne 0 ] && [ "$AZURE_SET" -ne "${#AZURE_VALUES[@]}" ]; then
+            echo "::error::Azure Trusted Signing is partially configured; all three AZURE_* secrets and all four AZURE_* repository variables are required."
             exit 1
-          }
-          test -n "${CSC_KEY_PASSWORD:-}" || {
-            echo "::error::WIN_CSC_KEY_PASSWORD is required; refusing to build an unsigned public release."
+          fi
+          if [ "$PFX_SET" -eq 1 ]; then
+            echo "::error::PFX signing is partially configured; both WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD are required."
             exit 1
-          }
+          fi
+          if [ "$AZURE_SET" -eq "${#AZURE_VALUES[@]}" ] && [ "$PFX_SET" -eq 2 ]; then
+            echo "::error::Both Azure and PFX signing are configured; select one publisher identity."
+            exit 1
+          fi
+
+          BUILD_ARGS=(--win --publish never "-c.forceCodeSigning=true")
+          case "${{ steps.tag.outputs.tag }}" in
+            *-beta*|*-rc*|*-alpha*)
+              BUILD_ARGS+=("-c.publish.releaseType=prerelease" "-c.publish.channel=beta")
+              ;;
+          esac
+          if [ "$AZURE_SET" -eq "${#AZURE_VALUES[@]}" ]; then
+            SIGNING_MODE="azure"
+            BUILD_ARGS+=(
+              "-c.win.azureSignOptions.endpoint=${AZURE_CODE_SIGNING_ENDPOINT}"
+              "-c.win.azureSignOptions.certificateProfileName=${AZURE_CERTIFICATE_PROFILE_NAME}"
+              "-c.win.azureSignOptions.codeSigningAccountName=${AZURE_CODE_SIGNING_ACCOUNT_NAME}"
+              "-c.win.azureSignOptions.publisherName=${AZURE_PUBLISHER_NAME}"
+            )
+          elif [ "$PFX_SET" -eq 2 ]; then
+            SIGNING_MODE="pfx"
+          else
+            echo "::error::No trusted Windows signing identity is configured; refusing to build an unsigned public release."
+            exit 1
+          fi
+
+          echo "mode=$SIGNING_MODE" >> "$GITHUB_OUTPUT"
+          echo "Building Windows release with $SIGNING_MODE signing."
           npm run build
-          PRERELEASE=""
-          case "${{ steps.tag.outputs.tag }}" in *-beta*|*-rc*|*-alpha*) PRERELEASE="-c.publish.releaseType=prerelease -c.publish.channel=beta" ;; esac
-          npx electron-builder --win --publish never $PRERELEASE
+          npx electron-builder "${BUILD_ARGS[@]}"
 
       - name: Verify Windows Authenticode and updater manifest
         id: windows-signature
