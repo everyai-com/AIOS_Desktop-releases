@@ -47,6 +47,8 @@ jobs:
             sha256sum --check
           tar -xzf "$RUNNER_TEMP/shellcheck.tar.gz" -C "$RUNNER_TEMP"
           echo "SHELLCHECK=$RUNNER_TEMP/shellcheck-v0.11.0/shellcheck" >> "$GITHUB_ENV"
+          ln -s "$RUNNER_TEMP/shellcheck-v0.11.0/shellcheck" "$RUNNER_TEMP/shellcheck"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
       - name: Validate workflows and scripts
         shell: bash

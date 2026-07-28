@@ -33,26 +33,29 @@ jobs:
         shell: bash
         run: |
           if [ -n "${{ github.event.client_payload.tag }}" ]; then
-            echo "tag=${{ github.event.client_payload.tag }}" >> $GITHUB_OUTPUT
+            echo "tag=${{ github.event.client_payload.tag }}" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
           fi
       - name: Create GitHub Release (idempotent)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
-          PRERELEASE_FLAG=""
-          case "$TAG" in *-beta*|*-rc*|*-alpha*) PRERELEASE_FLAG="--prerelease" ;; esac
+          RELEASE_ARGS=(
+            --repo everyai-com/AIOS_Desktop-releases
+            --title "${TAG#v}"
+            --notes "Release ${TAG#v}"
+            --draft
+          )
+          case "$TAG" in
+            *-beta*|*-rc*|*-alpha*) RELEASE_ARGS+=(--prerelease) ;;
+          esac
           if gh release view "$TAG" --repo everyai-com/AIOS_Desktop-releases >/dev/null 2>&1; then
             echo "Release $TAG already exists — skipping create."
           else
-            gh release create "$TAG" \
-              --repo everyai-com/AIOS_Desktop-releases \
-              --title "${TAG#v}" \
-              --notes "Release ${TAG#v}" \
-              --draft $PRERELEASE_FLAG
-            echo "Created draft release $TAG (prerelease: ${PRERELEASE_FLAG:-no})"
+            gh release create "$TAG" "${RELEASE_ARGS[@]}"
+            echo "Created draft release $TAG."
           fi
 
   build:
@@ -85,9 +88,9 @@ jobs:
         shell: bash
         run: |
           if [ -n "${{ github.event.client_payload.tag }}" ]; then
-            echo "tag=${{ github.event.client_payload.tag }}" >> $GITHUB_OUTPUT
+            echo "tag=${{ github.event.client_payload.tag }}" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Set up SSH agent (deploy key for private source repo)
@@ -142,14 +145,16 @@ jobs:
           done
           sudo installer -pkg /tmp/python-universal2.pkg -target /
           PY=/Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11
-          echo "AIOS_X64_PYTHON=$PY" >> $GITHUB_ENV
-          arch -x86_64 $PY -m pip install --upgrade pip
-          arch -x86_64 $PY -m pip install pyinstaller
-          arch -x86_64 $PY -m pip install -r python/requirements.txt
-          arch -x86_64 $PY -m pip uninstall -y Pillow
+          echo "AIOS_X64_PYTHON=$PY" >> "$GITHUB_ENV"
+          arch -x86_64 "$PY" -m pip install --upgrade pip
+          arch -x86_64 "$PY" -m pip install pyinstaller
+          arch -x86_64 "$PY" -m pip install -r python/requirements.txt
+          arch -x86_64 "$PY" -m pip uninstall -y Pillow
           mkdir -p /tmp/x86_64-wheels
-          arch -x86_64 $PY -m pip download --no-deps --platform=macosx_10_10_x86_64 --python-version=3.11 --implementation=cp --abi=cp311 --only-binary=:all: --dest=/tmp/x86_64-wheels Pillow
-          arch -x86_64 $PY -m pip install --no-deps --force-reinstall /tmp/x86_64-wheels/*.whl
+          arch -x86_64 "$PY" -m pip download --no-deps --platform=macosx_10_10_x86_64 --python-version=3.11 --implementation=cp --abi=cp311 --only-binary=:all: --dest=/tmp/x86_64-wheels Pillow
+          PILLOW_WHEELS=(/tmp/x86_64-wheels/*.whl)
+          [ "${#PILLOW_WHEELS[@]}" -eq 1 ] || { echo "Expected one Pillow wheel"; exit 1; }
+          arch -x86_64 "$PY" -m pip install --no-deps --force-reinstall "${PILLOW_WHEELS[0]}"
           PIL_SO=/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/PIL/_imaging.cpython-311-darwin.so
           file "$PIL_SO"
           file "$PIL_SO" | grep -q x86_64 || { echo "Pillow _imaging.so is not x86_64 — aborting"; exit 1; }
@@ -434,9 +439,13 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           npm run build
-          PRERELEASE=""
-          case "${{ steps.tag.outputs.tag }}" in *-beta*|*-rc*|*-alpha*) PRERELEASE="-c.publish.releaseType=prerelease -c.publish.channel=beta" ;; esac
-          npx electron-builder --mac --arm64 --publish always $PRERELEASE
+          BUILD_ARGS=(--mac --arm64 --publish always)
+          case "${{ steps.tag.outputs.tag }}" in
+            *-beta*|*-rc*|*-alpha*)
+              BUILD_ARGS+=("-c.publish.releaseType=prerelease" "-c.publish.channel=beta")
+              ;;
+          esac
+          npx electron-builder "${BUILD_ARGS[@]}"
 
       - name: Publish (macOS x64 / Intel)
         if: matrix.platform == 'mac' && matrix.arch == 'x64'
@@ -451,9 +460,13 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           npm run build
-          PRERELEASE=""
-          case "${{ steps.tag.outputs.tag }}" in *-beta*|*-rc*|*-alpha*) PRERELEASE="-c.publish.releaseType=prerelease -c.publish.channel=beta" ;; esac
-          npx electron-builder --mac --x64 --publish always $PRERELEASE
+          BUILD_ARGS=(--mac --x64 --publish always)
+          case "${{ steps.tag.outputs.tag }}" in
+            *-beta*|*-rc*|*-alpha*)
+              BUILD_ARGS+=("-c.publish.releaseType=prerelease" "-c.publish.channel=beta")
+              ;;
+          esac
+          npx electron-builder "${BUILD_ARGS[@]}"
 
       # electron-builder starts its publish queue before afterAllArtifactBuild
       # finishes notarizing/stapling the DMG. Without this explicit final upload,
@@ -507,9 +520,9 @@ jobs:
         shell: bash
         run: |
           if [ -n "${{ github.event.client_payload.tag }}" ]; then
-            echo "tag=${{ github.event.client_payload.tag }}" >> $GITHUB_OUTPUT
+            echo "tag=${{ github.event.client_payload.tag }}" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
           fi
       - name: Merge Mac manifest with both arches
         env:
@@ -557,9 +570,9 @@ jobs:
         shell: bash
         run: |
           if [ -n "${{ github.event.client_payload.tag }}" ]; then
-            echo "tag=${{ github.event.client_payload.tag }}" >> $GITHUB_OUTPUT
+            echo "tag=${{ github.event.client_payload.tag }}" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Verify complete public asset set and publish release

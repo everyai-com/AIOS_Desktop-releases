@@ -22,20 +22,18 @@ if ($actualSha256 -ne $expectedSha256) {
 }
 
 Expand-Archive -LiteralPath $archive -DestinationPath $expanded -Force
-$installers = @(
-  Get-ChildItem -LiteralPath $expanded -Recurse -File -Filter "*.exe"
-)
-if ($installers.Count -ne 1) {
-  throw "Expected exactly one eSigner CKA installer; found $($installers.Count)"
+$installer = Join-Path $expanded "SSL.COM eSigner CKA_1.0.7_build_20240717.exe"
+if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
+  throw "Expected eSigner CKA installer is missing from the pinned archive"
 }
 
-$installerSignature = Get-AuthenticodeSignature -LiteralPath $installers[0].FullName
+$installerSignature = Get-AuthenticodeSignature -LiteralPath $installer
 if ($installerSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
   throw "eSigner CKA installer Authenticode is not trusted: $($installerSignature.Status)"
 }
 
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-$installerProcess = Start-Process -FilePath $installers[0].FullName `
+$installerProcess = Start-Process -FilePath $installer `
   -ArgumentList @("/CURRENTUSER", "/VERYSILENT", "/SUPPRESSMSGBOXES", "/DIR=$InstallDir") `
   -Wait -PassThru
 if ($installerProcess.ExitCode -ne 0) {
