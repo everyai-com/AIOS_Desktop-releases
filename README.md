@@ -24,6 +24,11 @@ See [Releases](https://github.com/everyai-com/AIOS_Desktop-releases/releases).
 1. Bump version in `everyai-com/AIOS_Desktop` (private) and tag `v*.*.*`
 2. Tag-push fires a tiny dispatcher workflow on the private repo
 3. The dispatcher sends a `repository_dispatch` event here
-4. This repo's `release.yml` checks out the source via SSH deploy key, builds Mac arm64 + Mac x64 + Windows in parallel, and publishes here
+4. This repo's `release.yml` checks out the source via SSH deploy key and
+   builds Mac arm64 + Mac x64 + Windows in parallel
+5. New releases remain drafts while the workflow verifies the final stapled
+   Mac DMGs, a trusted and timestamped Windows Authenticode signature, updater
+   manifests, public asset names, sizes, and SHA-256 digests
+6. The release becomes public only after every platform gate passes
 
 See [.github/workflows/release.yml](.github/workflows/release.yml) for the build orchestration.
