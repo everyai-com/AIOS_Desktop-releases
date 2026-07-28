@@ -33,26 +33,29 @@ jobs:
         shell: bash
         run: |
           if [ -n "${{ github.event.client_payload.tag }}" ]; then
-            echo "tag=${{ github.event.client_payload.tag }}" >> $GITHUB_OUTPUT
+            echo "tag=${{ github.event.client_payload.tag }}" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
           fi
       - name: Create GitHub Release (idempotent)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
-          PRERELEASE_FLAG=""
-          case "$TAG" in *-beta*|*-rc*|*-alpha*) PRERELEASE_FLAG="--prerelease" ;; esac
+          RELEASE_ARGS=(
+            --repo everyai-com/AIOS_Desktop-releases
+            --title "${TAG#v}"
+            --notes "Release ${TAG#v}"
+            --draft
+          )
+          case "$TAG" in
+            *-beta*|*-rc*|*-alpha*) RELEASE_ARGS+=(--prerelease) ;;
+          esac
           if gh release view "$TAG" --repo everyai-com/AIOS_Desktop-releases >/dev/null 2>&1; then
             echo "Release $TAG already exists — skipping create."
           else
-            gh release create "$TAG" \
-              --repo everyai-com/AIOS_Desktop-releases \
-              --title "${TAG#v}" \
-              --notes "Release ${TAG#v}" \
-              --draft $PRERELEASE_FLAG
-            echo "Created draft release $TAG (prerelease: ${PRERELEASE_FLAG:-no})"
+            gh release create "$TAG" "${RELEASE_ARGS[@]}"
+            echo "Created draft release $TAG."
           fi
 
   build:
@@ -75,14 +78,19 @@ jobs:
             pyinstallerArch: x86_64
     runs-on: ${{ matrix.os }}
     steps:
+      - name: Checkout release infrastructure
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
       - name: Resolve tag
         id: tag
         shell: bash
         run: |
           if [ -n "${{ github.event.client_payload.tag }}" ]; then
-            echo "tag=${{ github.event.client_payload.tag }}" >> $GITHUB_OUTPUT
+            echo "tag=${{ github.event.client_payload.tag }}" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Set up SSH agent (deploy key for private source repo)
@@ -137,14 +145,16 @@ jobs:
           done
           sudo installer -pkg /tmp/python-universal2.pkg -target /
           PY=/Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11
-          echo "AIOS_X64_PYTHON=$PY" >> $GITHUB_ENV
-          arch -x86_64 $PY -m pip install --upgrade pip
-          arch -x86_64 $PY -m pip install pyinstaller
-          arch -x86_64 $PY -m pip install -r python/requirements.txt
-          arch -x86_64 $PY -m pip uninstall -y Pillow
+          echo "AIOS_X64_PYTHON=$PY" >> "$GITHUB_ENV"
+          arch -x86_64 "$PY" -m pip install --upgrade pip
+          arch -x86_64 "$PY" -m pip install pyinstaller
+          arch -x86_64 "$PY" -m pip install -r python/requirements.txt
+          arch -x86_64 "$PY" -m pip uninstall -y Pillow
           mkdir -p /tmp/x86_64-wheels
-          arch -x86_64 $PY -m pip download --no-deps --platform=macosx_10_10_x86_64 --python-version=3.11 --implementation=cp --abi=cp311 --only-binary=:all: --dest=/tmp/x86_64-wheels Pillow
-          arch -x86_64 $PY -m pip install --no-deps --force-reinstall /tmp/x86_64-wheels/*.whl
+          arch -x86_64 "$PY" -m pip download --no-deps --platform=macosx_10_10_x86_64 --python-version=3.11 --implementation=cp --abi=cp311 --only-binary=:all: --dest=/tmp/x86_64-wheels Pillow
+          PILLOW_WHEELS=(/tmp/x86_64-wheels/*.whl)
+          [ "${#PILLOW_WHEELS[@]}" -eq 1 ] || { echo "Expected one Pillow wheel"; exit 1; }
+          arch -x86_64 "$PY" -m pip install --no-deps --force-reinstall "${PILLOW_WHEELS[0]}"
           PIL_SO=/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/PIL/_imaging.cpython-311-darwin.so
           file "$PIL_SO"
           file "$PIL_SO" | grep -q x86_64 || { echo "Pillow _imaging.so is not x86_64 — aborting"; exit 1; }
@@ -224,75 +234,7 @@ jobs:
           AZURE_CERTIFICATE_PROFILE_NAME: ${{ vars.AZURE_CERTIFICATE_PROFILE_NAME }}
           AZURE_CODE_SIGNING_ACCOUNT_NAME: ${{ vars.AZURE_CODE_SIGNING_ACCOUNT_NAME }}
           AZURE_PUBLISHER_NAME: ${{ vars.AZURE_PUBLISHER_NAME }}
-        run: |
-          set -euo pipefail
-
-          ESIGNER_VALUES=(
-            "${ES_USERNAME:-}"
-            "${ES_PASSWORD:-}"
-            "${ES_TOTP_SECRET:-}"
-            "${ES_PUBLISHER_NAME:-}"
-          )
-          AZURE_VALUES=(
-            "${AZURE_TENANT_ID:-}"
-            "${AZURE_CLIENT_ID:-}"
-            "${AZURE_CLIENT_SECRET:-}"
-            "${AZURE_CODE_SIGNING_ENDPOINT:-}"
-            "${AZURE_CERTIFICATE_PROFILE_NAME:-}"
-            "${AZURE_CODE_SIGNING_ACCOUNT_NAME:-}"
-            "${AZURE_PUBLISHER_NAME:-}"
-          )
-          ESIGNER_SET=0
-          for VALUE in "${ESIGNER_VALUES[@]}"; do
-            if [ -n "$VALUE" ]; then ESIGNER_SET=$((ESIGNER_SET + 1)); fi
-          done
-          AZURE_SET=0
-          for VALUE in "${AZURE_VALUES[@]}"; do
-            if [ -n "$VALUE" ]; then AZURE_SET=$((AZURE_SET + 1)); fi
-          done
-          PFX_SET=0
-          if [ -n "${CSC_LINK:-}" ]; then PFX_SET=$((PFX_SET + 1)); fi
-          if [ -n "${CSC_KEY_PASSWORD:-}" ]; then PFX_SET=$((PFX_SET + 1)); fi
-
-          if [ "$ESIGNER_SET" -ne 0 ] && [ "$ESIGNER_SET" -ne "${#ESIGNER_VALUES[@]}" ]; then
-            echo "::error::SSL.com eSigner is partially configured; all three ES_* secrets and ES_PUBLISHER_NAME are required."
-            exit 1
-          fi
-          if [ "$AZURE_SET" -ne 0 ] && [ "$AZURE_SET" -ne "${#AZURE_VALUES[@]}" ]; then
-            echo "::error::Azure Trusted Signing is partially configured; all three AZURE_* secrets and all four AZURE_* repository variables are required."
-            exit 1
-          fi
-          if [ "$PFX_SET" -eq 1 ]; then
-            echo "::error::PFX signing is partially configured; both WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD are required."
-            exit 1
-          fi
-
-          COMPLETE_MODES=0
-          SIGNING_MODE=""
-          if [ "$ESIGNER_SET" -eq "${#ESIGNER_VALUES[@]}" ]; then
-            COMPLETE_MODES=$((COMPLETE_MODES + 1))
-            SIGNING_MODE="esigner"
-          fi
-          if [ "$AZURE_SET" -eq "${#AZURE_VALUES[@]}" ]; then
-            COMPLETE_MODES=$((COMPLETE_MODES + 1))
-            SIGNING_MODE="azure"
-          fi
-          if [ "$PFX_SET" -eq 2 ]; then
-            COMPLETE_MODES=$((COMPLETE_MODES + 1))
-            SIGNING_MODE="pfx"
-          fi
-
-          if [ "$COMPLETE_MODES" -eq 0 ]; then
-            echo "::error::No trusted Windows signing identity is configured; refusing to build an unsigned public release."
-            exit 1
-          fi
-          if [ "$COMPLETE_MODES" -ne 1 ]; then
-            echo "::error::Multiple Windows signing modes are configured; select exactly one publisher identity."
-            exit 1
-          fi
-
-          echo "mode=$SIGNING_MODE" >> "$GITHUB_OUTPUT"
-          echo "Selected $SIGNING_MODE signing."
+        run: ./scripts/select-windows-signing-mode.sh
 
       # eSigner CKA exposes the cloud-HSM certificate through the CurrentUser
       # Windows certificate store, where electron-builder's normal signtool
@@ -311,38 +253,10 @@ jobs:
           Write-Output "::add-mask::$env:ES_PASSWORD"
           Write-Output "::add-mask::$env:ES_TOTP_SECRET"
 
-          $archive = Join-Path $env:RUNNER_TEMP "SSL.COM-eSigner-CKA_1.0.7.zip"
-          $expanded = Join-Path $env:RUNNER_TEMP "esigner-setup"
           $installDir = Join-Path $env:RUNNER_TEMP "eSignerCKA"
           $masterKey = Join-Path $installDir "master.key"
-          $expectedSha256 = "0f40f0ef0aa5c7d73b2d854ec0d2f2be551a6bbbd99cbbd886f7d3ef77c3327c"
-          $downloadUrl = "https://github.com/SSLcom/eSignerCKA/releases/download/v1.0.7/SSL.COM-eSigner-CKA_1.0.7.zip"
-
-          Invoke-WebRequest -Uri $downloadUrl -OutFile $archive
-          $actualSha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actualSha256 -ne $expectedSha256) {
-            throw "eSigner CKA archive checksum mismatch"
-          }
-          Expand-Archive -LiteralPath $archive -DestinationPath $expanded -Force
-          $installers = @(
-            Get-ChildItem -LiteralPath $expanded -Recurse -File -Filter "*.exe"
-          )
-          if ($installers.Count -ne 1) {
-            throw "Expected exactly one eSigner CKA installer; found $($installers.Count)"
-          }
-
-          New-Item -ItemType Directory -Path $installDir -Force | Out-Null
-          $installerProcess = Start-Process -FilePath $installers[0].FullName `
-            -ArgumentList @("/CURRENTUSER", "/VERYSILENT", "/SUPPRESSMSGBOXES", "/DIR=$installDir") `
-            -Wait -PassThru
-          if ($installerProcess.ExitCode -ne 0) {
-            throw "eSigner CKA installer failed with exit code $($installerProcess.ExitCode)"
-          }
-
-          $tool = Join-Path $installDir "eSignerCKATool.exe"
-          if (-not (Test-Path -LiteralPath $tool -PathType Leaf)) {
-            throw "eSigner CKA command-line tool was not installed"
-          }
+          $installerScript = Join-Path $env:GITHUB_WORKSPACE "scripts\install-esigner-cka.ps1"
+          $tool = & $installerScript -InstallDir $installDir
           & $tool config -mode "product" -user $env:ES_USERNAME -pass $env:ES_PASSWORD `
             -totp $env:ES_TOTP_SECRET -key $masterKey -r | Out-Null
           if ($LASTEXITCODE -ne 0) {
@@ -385,6 +299,8 @@ jobs:
         working-directory: source
         shell: bash
         env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          SIGNING_MODE: ${{ steps.windows-signing-mode.outputs.mode }}
           CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -394,34 +310,7 @@ jobs:
           AZURE_CERTIFICATE_PROFILE_NAME: ${{ vars.AZURE_CERTIFICATE_PROFILE_NAME }}
           AZURE_CODE_SIGNING_ACCOUNT_NAME: ${{ vars.AZURE_CODE_SIGNING_ACCOUNT_NAME }}
           AZURE_PUBLISHER_NAME: ${{ vars.AZURE_PUBLISHER_NAME }}
-        run: |
-          set -euo pipefail
-
-          BUILD_ARGS=(--win --publish never "-c.forceCodeSigning=true")
-          case "${{ steps.tag.outputs.tag }}" in
-            *-beta*|*-rc*|*-alpha*)
-              BUILD_ARGS+=("-c.publish.releaseType=prerelease" "-c.publish.channel=beta")
-              ;;
-          esac
-          if [ "${{ steps.windows-signing-mode.outputs.mode }}" = "azure" ]; then
-            BUILD_ARGS+=(
-              "-c.win.azureSignOptions.endpoint=${AZURE_CODE_SIGNING_ENDPOINT}"
-              "-c.win.azureSignOptions.certificateProfileName=${AZURE_CERTIFICATE_PROFILE_NAME}"
-              "-c.win.azureSignOptions.codeSigningAccountName=${AZURE_CODE_SIGNING_ACCOUNT_NAME}"
-              "-c.win.azureSignOptions.publisherName=${AZURE_PUBLISHER_NAME}"
-            )
-          elif [ "${{ steps.windows-signing-mode.outputs.mode }}" = "esigner" ]; then
-            BUILD_ARGS+=(
-              "-c.win.signtoolOptions.certificateSha1=${ESIGNER_CERT_THUMBPRINT}"
-              "-c.win.signtoolOptions.publisherName=${ESIGNER_PUBLISHER_DN}"
-              "-c.win.signtoolOptions.rfc3161TimeStampServer=http://ts.ssl.com"
-            )
-          fi
-
-          echo "mode=${{ steps.windows-signing-mode.outputs.mode }}" >> "$GITHUB_OUTPUT"
-          echo "Building Windows release with ${{ steps.windows-signing-mode.outputs.mode }} signing."
-          npm run build
-          npx electron-builder "${BUILD_ARGS[@]}"
+        run: ../scripts/build-windows-release.sh
 
       - name: Verify Windows Authenticode and updater manifest
         id: windows-signature
@@ -550,9 +439,13 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           npm run build
-          PRERELEASE=""
-          case "${{ steps.tag.outputs.tag }}" in *-beta*|*-rc*|*-alpha*) PRERELEASE="-c.publish.releaseType=prerelease -c.publish.channel=beta" ;; esac
-          npx electron-builder --mac --arm64 --publish always $PRERELEASE
+          BUILD_ARGS=(--mac --arm64 --publish always)
+          case "${{ steps.tag.outputs.tag }}" in
+            *-beta*|*-rc*|*-alpha*)
+              BUILD_ARGS+=("-c.publish.releaseType=prerelease" "-c.publish.channel=beta")
+              ;;
+          esac
+          npx electron-builder "${BUILD_ARGS[@]}"
 
       - name: Publish (macOS x64 / Intel)
         if: matrix.platform == 'mac' && matrix.arch == 'x64'
@@ -567,9 +460,13 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           npm run build
-          PRERELEASE=""
-          case "${{ steps.tag.outputs.tag }}" in *-beta*|*-rc*|*-alpha*) PRERELEASE="-c.publish.releaseType=prerelease -c.publish.channel=beta" ;; esac
-          npx electron-builder --mac --x64 --publish always $PRERELEASE
+          BUILD_ARGS=(--mac --x64 --publish always)
+          case "${{ steps.tag.outputs.tag }}" in
+            *-beta*|*-rc*|*-alpha*)
+              BUILD_ARGS+=("-c.publish.releaseType=prerelease" "-c.publish.channel=beta")
+              ;;
+          esac
+          npx electron-builder "${BUILD_ARGS[@]}"
 
       # electron-builder starts its publish queue before afterAllArtifactBuild
       # finishes notarizing/stapling the DMG. Without this explicit final upload,
@@ -623,9 +520,9 @@ jobs:
         shell: bash
         run: |
           if [ -n "${{ github.event.client_payload.tag }}" ]; then
-            echo "tag=${{ github.event.client_payload.tag }}" >> $GITHUB_OUTPUT
+            echo "tag=${{ github.event.client_payload.tag }}" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
           fi
       - name: Merge Mac manifest with both arches
         env:
@@ -673,9 +570,9 @@ jobs:
         shell: bash
         run: |
           if [ -n "${{ github.event.client_payload.tag }}" ]; then
-            echo "tag=${{ github.event.client_payload.tag }}" >> $GITHUB_OUTPUT
+            echo "tag=${{ github.event.client_payload.tag }}" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Verify complete public asset set and publish release

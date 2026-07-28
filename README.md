@@ -92,4 +92,11 @@ the certificate-profile signer role, run:
 Rerun `release.yml` for the selected source tag only after the chosen
 configurator's dry-run and GitHub name checks pass.
 
+Every release-infrastructure PR runs `validate.yml`. It lints both workflows,
+ShellChecks every Bash script, executes the signing-mode and build-argument
+matrices, and performs a no-credential Windows installation of the
+checksum-pinned eSigner CKA package after verifying the installer's own trusted
+Authenticode signature. The certificate-backed signing operation remains the
+final release gate.
+
 See [.github/workflows/release.yml](.github/workflows/release.yml) for the build orchestration.
