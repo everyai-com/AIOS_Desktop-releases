@@ -254,6 +254,38 @@ jobs:
           case "${{ steps.tag.outputs.tag }}" in *-beta*|*-rc*|*-alpha*) PRERELEASE="-c.publish.releaseType=prerelease -c.publish.channel=beta" ;; esac
           npx electron-builder --mac --x64 --publish always $PRERELEASE
 
+      # electron-builder starts its publish queue before afterAllArtifactBuild
+      # finishes notarizing/stapling the DMG. Without this explicit final upload,
+      # the release can contain the pre-staple bytes even though the runner log
+      # says "The staple and validate action worked." Re-upload the exact
+      # post-hook file and prove GitHub stored the same digest.
+      - name: Publish final stapled DMG
+        if: matrix.platform == 'mac'
+        working-directory: source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.tag }}"
+          VERSION="${TAG#v}"
+          REPO="everyai-com/AIOS_Desktop-releases"
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            LOCAL_DMG="release/AIOS Desktop-${VERSION}-arm64.dmg"
+            PUBLIC_NAME="AIOS-Desktop-${VERSION}-arm64.dmg"
+          else
+            LOCAL_DMG="release/AIOS Desktop-${VERSION}.dmg"
+            PUBLIC_NAME="AIOS-Desktop-${VERSION}.dmg"
+          fi
+          xcrun stapler validate "$LOCAL_DMG"
+          cp "$LOCAL_DMG" "/tmp/$PUBLIC_NAME"
+          gh release upload "$TAG" "/tmp/$PUBLIC_NAME" --clobber --repo "$REPO"
+          LOCAL_DIGEST="sha256:$(shasum -a 256 "/tmp/$PUBLIC_NAME" | awk '{print $1}')"
+          REMOTE_DIGEST="$(gh release view "$TAG" --repo "$REPO" --json assets \
+            --jq ".assets[] | select(.name == \"$PUBLIC_NAME\") | .digest")"
+          test "$REMOTE_DIGEST" = "$LOCAL_DIGEST"
+          echo "Published final stapled $PUBLIC_NAME ($REMOTE_DIGEST)"
+
       - name: Upload installer artifacts (debugging)
         if: always()
         uses: actions/upload-artifact@v4
