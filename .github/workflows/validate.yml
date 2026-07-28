@@ -1,0 +1,76 @@
+name: Validate release infrastructure
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "scripts/**"
+      - "README.md"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+      - "scripts/**"
+      - "README.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    name: Workflow, shell, and selector tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install checksum-pinned actionlint 1.7.12
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 \
+            -o "$RUNNER_TEMP/actionlint.tar.gz" \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/actionlint.tar.gz" |
+            sha256sum --check
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          echo "ACTIONLINT=$RUNNER_TEMP/actionlint" >> "$GITHUB_ENV"
+
+      - name: Install checksum-pinned ShellCheck 0.11.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 \
+            -o "$RUNNER_TEMP/shellcheck.tar.gz" \
+            https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.gz
+          echo "b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6  $RUNNER_TEMP/shellcheck.tar.gz" |
+            sha256sum --check
+          tar -xzf "$RUNNER_TEMP/shellcheck.tar.gz" -C "$RUNNER_TEMP"
+          echo "SHELLCHECK=$RUNNER_TEMP/shellcheck-v0.11.0/shellcheck" >> "$GITHUB_ENV"
+
+      - name: Validate workflows and scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$ACTIONLINT"
+          "$SHELLCHECK" scripts/*.sh
+          bash -n scripts/*.sh
+          ./scripts/test-windows-signing-mode.sh
+          ./scripts/test-windows-build.sh
+
+  esigner-installer:
+    name: eSigner CKA installer preflight
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify and install pinned eSigner CKA
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installDir = Join-Path $env:RUNNER_TEMP "eSignerCKA"
+          $tool = & .\scripts\install-esigner-cka.ps1 -InstallDir $installDir
+          if (-not (Test-Path -LiteralPath $tool -PathType Leaf)) {
+            throw "eSigner CKA preflight did not produce its command-line tool"
+          }
+          Write-Host "eSigner CKA no-credential installer preflight passed."
