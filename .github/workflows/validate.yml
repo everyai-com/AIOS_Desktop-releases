@@ -59,6 +59,24 @@ jobs:
           bash -n scripts/*.sh
           ./scripts/test-windows-signing-mode.sh
           ./scripts/test-windows-build.sh
+          # shellcheck disable=SC2016 # PowerShell expands these expressions.
+          pwsh -NoProfile -Command '
+            $failed = $false
+            foreach ($path in Get-ChildItem scripts/*.ps1) {
+              $tokens = $null
+              $errors = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile(
+                $path.FullName,
+                [ref]$tokens,
+                [ref]$errors
+              )
+              if ($errors.Count -gt 0) {
+                $errors | ForEach-Object { Write-Error "$($path.Name): $($_.Message)" }
+                $failed = $true
+              }
+            }
+            if ($failed) { exit 1 }
+          '
 
   esigner-installer:
     name: eSigner CKA installer preflight

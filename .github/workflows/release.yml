@@ -249,44 +249,11 @@ jobs:
           ES_PUBLISHER_NAME: ${{ vars.ES_PUBLISHER_NAME }}
         run: |
           $ErrorActionPreference = "Stop"
-          Write-Output "::add-mask::$env:ES_USERNAME"
-          Write-Output "::add-mask::$env:ES_PASSWORD"
-          Write-Output "::add-mask::$env:ES_TOTP_SECRET"
-
           $installDir = Join-Path $env:RUNNER_TEMP "eSignerCKA"
-          $masterKey = Join-Path $installDir "master.key"
-          $installerScript = Join-Path $env:GITHUB_WORKSPACE "scripts\install-esigner-cka.ps1"
-          $tool = & $installerScript -InstallDir $installDir
-          & $tool config -mode "product" -user $env:ES_USERNAME -pass $env:ES_PASSWORD `
-            -totp $env:ES_TOTP_SECRET -key $masterKey -r | Out-Null
-          if ($LASTEXITCODE -ne 0) {
-            throw "eSigner CKA account configuration failed"
-          }
-          & $tool unload | Out-Null
-          if ($LASTEXITCODE -ne 0) {
-            throw "eSigner CKA certificate unload failed"
-          }
-          & $tool load | Out-Null
-          if ($LASTEXITCODE -ne 0) {
-            throw "eSigner CKA certificate load failed"
-          }
-
-          $certificates = @(
-            Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert |
-              Where-Object {
-                $_.HasPrivateKey -and
-                $_.NotAfter -gt (Get-Date) -and
-                $_.GetNameInfo(
-                  [System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName,
-                  $false
-                ) -eq $env:ES_PUBLISHER_NAME
-              }
-          )
-          if ($certificates.Count -ne 1) {
-            throw "Expected exactly one usable eSigner certificate for ES_PUBLISHER_NAME; found $($certificates.Count)"
-          }
-          "ESIGNER_CERT_THUMBPRINT=$($certificates[0].Thumbprint)" >> $env:GITHUB_ENV
-          "ESIGNER_PUBLISHER_DN=$($certificates[0].Subject)" >> $env:GITHUB_ENV
+          $loader = Join-Path $env:GITHUB_WORKSPACE "scripts\load-esigner-certificate.ps1"
+          $identity = & $loader -InstallDir $installDir
+          "ESIGNER_CERT_THUMBPRINT=$($identity.Thumbprint)" >> $env:GITHUB_ENV
+          "ESIGNER_PUBLISHER_DN=$($identity.Subject)" >> $env:GITHUB_ENV
           Write-Host "Loaded one expected eSigner code-signing certificate."
 
       # Windows is deliberately built without electron-builder publishing.

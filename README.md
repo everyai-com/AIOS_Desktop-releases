@@ -71,7 +71,27 @@ organizations. Then run:
 
 The configurator prompts locally, streams credentials to GitHub over stdin,
 refuses another signer mode, and never writes credentials to disk. It
-intentionally does not trigger a release. The workflow downloads SSL.com's
+intentionally does not trigger a release. Before cutting a Desktop tag, run the
+non-publishing certificate probe:
+
+```bash
+gh workflow run windows-signing-readiness.yml \
+  --repo everyai-com/AIOS_Desktop-releases \
+  --ref main
+gh run list \
+  --repo everyai-com/AIOS_Desktop-releases \
+  --workflow windows-signing-readiness.yml \
+  --limit 1
+# Then copy that run ID:
+gh run watch <run-id> \
+  --repo everyai-com/AIOS_Desktop-releases \
+  --exit-status
+```
+
+The readiness workflow is accepted only from `main`. It loads the expected
+cloud-HSM identity, signs a disposable executable on `windows-latest`, and
+requires trusted Authenticode, the exact selected thumbprint/full DN, and an
+RFC3161 timestamp. It publishes nothing. The release workflow downloads SSL.com's
 public eSigner CKA v1.0.7 archive by a pinned SHA-256, loads exactly one matching
 certificate into the ephemeral runner's CurrentUser store, and lets
 electron-builder sign through Windows signtool.
