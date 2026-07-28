@@ -51,8 +51,8 @@ jobs:
               --repo everyai-com/AIOS_Desktop-releases \
               --title "${TAG#v}" \
               --notes "Release ${TAG#v}" \
-              --draft=false $PRERELEASE_FLAG
-            echo "Created release $TAG (prerelease: ${PRERELEASE_FLAG:-no})"
+              --draft $PRERELEASE_FLAG
+            echo "Created draft release $TAG (prerelease: ${PRERELEASE_FLAG:-no})"
           fi
 
   build:
@@ -206,19 +206,136 @@ jobs:
         working-directory: source
         run: arch -x86_64 ./dist/aios-host/aios-host --smoke-import
 
-      - name: Publish (Windows)
+      # Windows is deliberately built without electron-builder publishing.
+      # The build log says "signing with signtool.exe" even when CSC_LINK is
+      # empty, so publication must happen only after PowerShell proves that the
+      # final PE files carry one trusted, timestamped Authenticode identity.
+      - name: Build Windows installers without publishing
+        if: matrix.platform == 'win'
+        working-directory: source
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "${CSC_LINK:-}" || {
+            echo "::error::WIN_CSC_LINK is required; refusing to build an unsigned public release."
+            exit 1
+          }
+          test -n "${CSC_KEY_PASSWORD:-}" || {
+            echo "::error::WIN_CSC_KEY_PASSWORD is required; refusing to build an unsigned public release."
+            exit 1
+          }
+          npm run build
+          PRERELEASE=""
+          case "${{ steps.tag.outputs.tag }}" in *-beta*|*-rc*|*-alpha*) PRERELEASE="-c.publish.releaseType=prerelease -c.publish.channel=beta" ;; esac
+          npx electron-builder --win --publish never $PRERELEASE
+
+      - name: Verify Windows Authenticode and updater manifest
+        id: windows-signature
+        if: matrix.platform == 'win'
+        working-directory: source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = "${{ steps.tag.outputs.tag }}" -replace "^v", ""
+          $installer = "release\AIOS Desktop Setup $version.exe"
+          $targets = @(
+            "release\win-unpacked\AIOS Desktop.exe",
+            "release\win-unpacked\resources\aios-host\aios-host.exe",
+            "release\win-unpacked\resources\aios-host\_internal\speech_recognition\flac-win32.exe",
+            "release\win-unpacked\resources\elevate.exe",
+            $installer
+          )
+
+          $signerThumbprint = $null
+          foreach ($target in $targets) {
+            if (-not (Test-Path -LiteralPath $target -PathType Leaf)) {
+              throw "Expected signed Windows executable is missing: $target"
+            }
+            $signature = Get-AuthenticodeSignature -LiteralPath $target
+            if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+              throw "Authenticode is not trusted for $target (status: $($signature.Status); $($signature.StatusMessage))"
+            }
+            if ($null -eq $signature.SignerCertificate) {
+              throw "Authenticode signer certificate is missing for $target"
+            }
+            if ($null -eq $signature.TimeStamperCertificate) {
+              throw "RFC3161 timestamp certificate is missing for $target"
+            }
+            if ($null -eq $signerThumbprint) {
+              $signerThumbprint = $signature.SignerCertificate.Thumbprint
+            } elseif ($signature.SignerCertificate.Thumbprint -ne $signerThumbprint) {
+              throw "Windows executables were not signed by one consistent publisher"
+            }
+            Write-Host "Verified $target"
+            Write-Host "  signer: $($signature.SignerCertificate.Subject)"
+            Write-Host "  timestamp: $($signature.TimeStamperCertificate.Subject)"
+          }
+
+          $manifestName = if ("${{ steps.tag.outputs.tag }}" -match "-(beta|rc|alpha)") {
+            "beta.yml"
+          } else {
+            "latest.yml"
+          }
+          $manifestPath = "release\$manifestName"
+          if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+            throw "Windows updater manifest is missing: $manifestPath"
+          }
+          $publicInstaller = "AIOS-Desktop-Setup-$version.exe"
+          $sha512 = [Convert]::ToBase64String(
+            [Security.Cryptography.SHA512]::Create().ComputeHash(
+              [IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $installer))
+            )
+          )
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw
+          if (-not $manifest.Contains("path: $publicInstaller")) {
+            throw "Updater manifest does not name the verified installer: $publicInstaller"
+          }
+          if (-not $manifest.Contains("sha512: $sha512")) {
+            throw "Updater manifest SHA-512 does not match the verified installer"
+          }
+
+          "signer_subject=$((Get-AuthenticodeSignature -LiteralPath $installer).SignerCertificate.Subject)" >> $env:GITHUB_OUTPUT
+          "signer_thumbprint=$signerThumbprint" >> $env:GITHUB_OUTPUT
+          Write-Host "Windows signature and updater manifest verified."
+
+      - name: Publish verified Windows artifacts
         if: matrix.platform == 'win'
         working-directory: source
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
         run: |
-          npm run build
-          PRERELEASE=""
-          case "${{ steps.tag.outputs.tag }}" in *-beta*|*-rc*|*-alpha*) PRERELEASE="-c.publish.releaseType=prerelease -c.publish.channel=beta" ;; esac
-          npx electron-builder --win --publish always $PRERELEASE
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.tag }}"
+          VERSION="${TAG#v}"
+          REPO="everyai-com/AIOS_Desktop-releases"
+          INSTALLER_SOURCE="release/AIOS Desktop Setup ${VERSION}.exe"
+          PUBLIC_NAME="AIOS-Desktop-Setup-${VERSION}.exe"
+          MANIFEST="release/latest.yml"
+          case "$TAG" in *-beta*|*-rc*|*-alpha*) MANIFEST="release/beta.yml" ;; esac
+          STAGE="${RUNNER_TEMP}/aios-windows-release"
+
+          test -s "$INSTALLER_SOURCE"
+          test -s "$MANIFEST"
+          mkdir -p "$STAGE"
+          cp "$INSTALLER_SOURCE" "$STAGE/$PUBLIC_NAME"
+          cp "$MANIFEST" "$STAGE/$(basename "$MANIFEST")"
+          gh release upload "$TAG" \
+            "$STAGE/$PUBLIC_NAME" \
+            "$STAGE/$(basename "$MANIFEST")" \
+            --clobber --repo "$REPO"
+
+          for LOCAL_PATH in "$STAGE/$PUBLIC_NAME" "$STAGE/$(basename "$MANIFEST")"; do
+            ASSET_NAME="$(basename "$LOCAL_PATH")"
+            LOCAL_DIGEST="sha256:$(sha256sum "$LOCAL_PATH" | awk '{print $1}')"
+            REMOTE_DIGEST="$(gh release view "$TAG" --repo "$REPO" --json assets \
+              --jq ".assets[] | select(.name == \"$ASSET_NAME\") | .digest")"
+            test "$REMOTE_DIGEST" = "$LOCAL_DIGEST"
+            echo "Published verified $ASSET_NAME ($REMOTE_DIGEST)"
+          done
 
       - name: Publish (macOS arm64)
         if: matrix.platform == 'mac' && matrix.arch == 'arm64'
@@ -299,7 +416,6 @@ jobs:
 
   fix-mac-manifest:
     needs: build
-    if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Resolve tag
@@ -347,3 +463,74 @@ jobs:
           echo "--- merged $MANIFEST ---"
           cat "$MANIFEST"
           gh release upload "$TAG" "$MANIFEST" --clobber --repo "$REPO"
+
+  finalize-release:
+    needs: [build, fix-mac-manifest]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.client_payload.tag }}" ]; then
+            echo "tag=${{ github.event.client_payload.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Verify complete public asset set and publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.tag }}"
+          VERSION="${TAG#v}"
+          REPO="everyai-com/AIOS_Desktop-releases"
+          WIN_MANIFEST="latest.yml"
+          MAC_MANIFEST="latest-mac.yml"
+          case "$TAG" in
+            *-beta*|*-rc*|*-alpha*)
+              WIN_MANIFEST="beta.yml"
+              MAC_MANIFEST="beta-mac.yml"
+              ;;
+          esac
+
+          REQUIRED_ASSETS=(
+            "AIOS-Desktop-${VERSION}-arm64-mac.zip"
+            "AIOS-Desktop-${VERSION}-arm64.dmg"
+            "AIOS-Desktop-${VERSION}-arm64.dmg.blockmap"
+            "AIOS-Desktop-${VERSION}-mac.zip"
+            "AIOS-Desktop-${VERSION}.dmg"
+            "AIOS-Desktop-${VERSION}.dmg.blockmap"
+            "AIOS-Desktop-Setup-${VERSION}.exe"
+            "$MAC_MANIFEST"
+            "$WIN_MANIFEST"
+          )
+          ASSETS_JSON="$(gh release view "$TAG" --repo "$REPO" --json assets)"
+          for ASSET in "${REQUIRED_ASSETS[@]}"; do
+            SIZE="$(jq -r --arg name "$ASSET" \
+              '.assets[] | select(.name == $name) | .size' <<<"$ASSETS_JSON")"
+            DIGEST="$(jq -r --arg name "$ASSET" \
+              '.assets[] | select(.name == $name) | .digest' <<<"$ASSETS_JSON")"
+            test -n "$SIZE" && test "$SIZE" -gt 0
+            case "$DIGEST" in sha256:*) ;; *) exit 1 ;; esac
+            echo "Verified public asset $ASSET ($SIZE bytes, $DIGEST)"
+          done
+
+          ZIP_BLOCKMAPS="$(jq -r --arg version "$VERSION" \
+            '[.assets[] | select(.name | endswith(".zip.blockmap")) | select(.name | contains($version))] | length' \
+            <<<"$ASSETS_JSON")"
+          test "$ZIP_BLOCKMAPS" -eq 2
+
+          WORK_DIR="$(mktemp -d)"
+          trap 'find "$WORK_DIR" -xdev -depth -delete' EXIT
+          gh release download "$TAG" --repo "$REPO" \
+            -p "$MAC_MANIFEST" -p "$WIN_MANIFEST" -D "$WORK_DIR"
+          grep -Fxq "version: $VERSION" "$WORK_DIR/$MAC_MANIFEST"
+          grep -Fxq "version: $VERSION" "$WORK_DIR/$WIN_MANIFEST"
+          grep -Fq "AIOS-Desktop-${VERSION}-arm64-mac.zip" "$WORK_DIR/$MAC_MANIFEST"
+          grep -Fq "AIOS-Desktop-${VERSION}-mac.zip" "$WORK_DIR/$MAC_MANIFEST"
+          grep -Fq "AIOS-Desktop-Setup-${VERSION}.exe" "$WORK_DIR/$WIN_MANIFEST"
+
+          gh release edit "$TAG" --repo "$REPO" --draft=false
+          echo "Published complete verified release $TAG."
