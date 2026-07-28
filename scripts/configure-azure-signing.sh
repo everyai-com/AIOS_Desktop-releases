@@ -61,10 +61,12 @@ command -v gh >/dev/null 2>&1 || {
 }
 gh auth status >/dev/null
 
-PFX_SECRETS="$(gh secret list --repo "$REPO" --json name --jq '.[].name')"
-if grep -Eq '^(WIN_CSC_LINK|WIN_CSC_KEY_PASSWORD)$' <<<"$PFX_SECRETS"; then
-  echo "PFX signing secrets already exist on $REPO." >&2
-  echo "Remove that complete signer mode before configuring Azure." >&2
+OTHER_SIGNER_SECRETS="$(gh secret list --repo "$REPO" --json name --jq '.[].name')"
+OTHER_SIGNER_VARIABLES="$(gh variable list --repo "$REPO" --json name --jq '.[].name')"
+if grep -Eq '^(WIN_CSC_LINK|WIN_CSC_KEY_PASSWORD|ES_USERNAME|ES_PASSWORD|ES_TOTP_SECRET)$' <<<"$OTHER_SIGNER_SECRETS" ||
+   grep -Eq '^ES_PUBLISHER_NAME$' <<<"$OTHER_SIGNER_VARIABLES"; then
+  echo "Another Windows signing mode already has inputs on $REPO." >&2
+  echo "Remove every input for that mode before configuring Azure." >&2
   exit 1
 fi
 

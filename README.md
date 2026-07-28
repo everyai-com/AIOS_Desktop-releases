@@ -35,31 +35,61 @@ See [Releases](https://github.com/everyai-com/AIOS_Desktop-releases/releases).
 
 The Windows build accepts exactly one signing mode:
 
-- **Azure Trusted Signing (preferred):** repository secrets
+- **SSL.com eSigner CKA (preferred for AIOS's Indian legal entity):**
+  repository secrets `ES_USERNAME`, `ES_PASSWORD`, `ES_TOTP_SECRET`; repository
+  variable `ES_PUBLISHER_NAME`, set to the exact certificate SimpleName/CN. CI
+  derives the full distinguished name from that one selected certificate.
+- **Azure Artifact Signing Public Trust (eligible geographies only):** repository secrets
   `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`; repository
   variables `AZURE_CODE_SIGNING_ENDPOINT`,
   `AZURE_CERTIFICATE_PROFILE_NAME`, `AZURE_CODE_SIGNING_ACCOUNT_NAME`, and
   `AZURE_PUBLISHER_NAME`.
-- **Exportable PFX fallback:** repository secrets `WIN_CSC_LINK` (base64
-  certificate) and `WIN_CSC_KEY_PASSWORD`.
+- **Exportable PFX legacy fallback:** repository secrets `WIN_CSC_LINK` (base64
+  certificate) and `WIN_CSC_KEY_PASSWORD`. Current publicly trusted code-signing
+  certificates normally require a hardware token or cloud HSM and are not
+  exportable PFX files.
 
-Partial configuration, both modes at once, no signing identity, an untrusted
+Partial configuration, multiple modes at once, no signing identity, an untrusted
 signature, a missing timestamp, mixed publisher certificates, or a manifest
 hash mismatch all fail before Windows artifacts are uploaded. The build also
 sets electron-builder's `forceCodeSigning` gate, so signing failure stops
 packaging before the independent PowerShell checks run.
 
-After Microsoft approves the identity and the service principal has the
-certificate-profile signer role, run:
+For SAPHAARE LABS PRIVATE LIMITED, purchase and validate an SSL.com OV code
+signing certificate, enroll it in eSigner, and enable automated eSigner TOTP.
+SSL.com's [eSigner CI guide](https://www.ssl.com/how-to/how-to-integrate-esigner-cka-with-ci-cd-tools-for-automated-code-signing/)
+documents this cloud-HSM flow. Before ordering, make the company's legal name,
+address, and reachable phone verifiable through a qualified independent source;
+SSL.com's [organization-validation guide](https://www.ssl.com/guide/d-u-n-s-numbers-and-business-listings-for-code-signing-certificate-validation/)
+recommends a D-U-N-S listing and explains the additional ID check for younger
+organizations. Then run:
+
+```bash
+./scripts/configure-esigner-signing.sh --dry-run
+./scripts/configure-esigner-signing.sh
+```
+
+The configurator prompts locally, streams credentials to GitHub over stdin,
+refuses another signer mode, and never writes credentials to disk. It
+intentionally does not trigger a release. The workflow downloads SSL.com's
+public eSigner CKA v1.0.7 archive by a pinned SHA-256, loads exactly one matching
+certificate into the ephemeral runner's CurrentUser store, and lets
+electron-builder sign through Windows signtool.
+
+Azure remains available for identities in Microsoft's supported Public Trust
+geographies. India is not currently listed for either organization or
+individual Public Trust onboarding in Microsoft's
+[Artifact Signing quickstart](https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart)
+and [FAQ](https://learn.microsoft.com/en-us/azure/artifact-signing/faq). For an
+eligible identity, after Microsoft approval and the service principal receives
+the certificate-profile signer role, run:
 
 ```bash
 ./scripts/configure-azure-signing.sh --dry-run
 ./scripts/configure-azure-signing.sh
 ```
 
-The configurator prompts locally, streams secrets to GitHub over stdin, refuses
-an existing PFX signer, and never writes credentials to disk. It intentionally
-does not trigger a release; rerun `release.yml` for the selected source tag only
-after its dry-run and GitHub name checks pass.
+Rerun `release.yml` for the selected source tag only after the chosen
+configurator's dry-run and GitHub name checks pass.
 
 See [.github/workflows/release.yml](.github/workflows/release.yml) for the build orchestration.
