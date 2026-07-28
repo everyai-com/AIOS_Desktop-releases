@@ -49,4 +49,17 @@ hash mismatch all fail before Windows artifacts are uploaded. The build also
 sets electron-builder's `forceCodeSigning` gate, so signing failure stops
 packaging before the independent PowerShell checks run.
 
+After Microsoft approves the identity and the service principal has the
+certificate-profile signer role, run:
+
+```bash
+./scripts/configure-azure-signing.sh --dry-run
+./scripts/configure-azure-signing.sh
+```
+
+The configurator prompts locally, streams secrets to GitHub over stdin, refuses
+an existing PFX signer, and never writes credentials to disk. It intentionally
+does not trigger a release; rerun `release.yml` for the selected source tag only
+after its dry-run and GitHub name checks pass.
+
 See [.github/workflows/release.yml](.github/workflows/release.yml) for the build orchestration.
