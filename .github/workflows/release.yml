@@ -167,6 +167,13 @@ jobs:
         working-directory: source
         run: npm run check
 
+      # `npm run build:python` stages a modern FLAC binary into the frozen
+      # sidecar. Install it before that command so the source-level packaging
+      # gate can enforce the same contract locally and in release CI.
+      - name: Install modern FLAC for Mac arm64 sidecar
+        if: matrix.platform == 'mac' && matrix.arch == 'arm64'
+        run: brew install flac
+
       - name: Build Python sidecar
         if: '!(matrix.platform == ''mac'' && matrix.arch == ''x64'')'
         working-directory: source
@@ -180,17 +187,6 @@ jobs:
         env:
           AIOS_PYINSTALLER_TARGET_ARCH: x86_64
         run: arch -x86_64 "$AIOS_X64_PYTHON" -m PyInstaller --noconfirm --clean build/aios-host.spec
-
-      - name: Bundle modern flac into Mac sidecar (arm64)
-        if: matrix.platform == 'mac' && matrix.arch == 'arm64'
-        working-directory: source
-        run: |
-          set -euo pipefail
-          brew install flac
-          SRC=$(brew --prefix flac)/bin/flac
-          DEST=./dist/aios-host/_internal/speech_recognition/flac-mac
-          cp "$SRC" "$DEST"
-          chmod +x "$DEST"
 
       - name: Bundle modern flac into Mac sidecar (Intel)
         if: matrix.platform == 'mac' && matrix.arch == 'x64'
