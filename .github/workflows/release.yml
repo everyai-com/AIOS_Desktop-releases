@@ -230,6 +230,7 @@ jobs:
           AZURE_CERTIFICATE_PROFILE_NAME: ${{ vars.AZURE_CERTIFICATE_PROFILE_NAME }}
           AZURE_CODE_SIGNING_ACCOUNT_NAME: ${{ vars.AZURE_CODE_SIGNING_ACCOUNT_NAME }}
           AZURE_PUBLISHER_NAME: ${{ vars.AZURE_PUBLISHER_NAME }}
+          ALLOW_UNSIGNED_WINDOWS: ${{ vars.ALLOW_UNSIGNED_WINDOWS }}
         run: ./scripts/select-windows-signing-mode.sh
 
       # eSigner CKA exposes the cloud-HSM certificate through the CurrentUser
@@ -292,10 +293,15 @@ jobs:
             $installer
           )
 
+          $requireSignature = "${{ steps.windows-signing-mode.outputs.mode }}" -ne "unsigned"
           $signerThumbprint = $null
           foreach ($target in $targets) {
             if (-not (Test-Path -LiteralPath $target -PathType Leaf)) {
-              throw "Expected signed Windows executable is missing: $target"
+              throw "Expected Windows executable is missing: $target"
+            }
+            if (-not $requireSignature) {
+              Write-Host "Skipping Authenticode check (unsigned mode): $target"
+              continue
             }
             $signature = Get-AuthenticodeSignature -LiteralPath $target
             if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
@@ -349,9 +355,15 @@ jobs:
             throw "Updater manifest SHA-512 does not match the verified installer"
           }
 
-          "signer_subject=$((Get-AuthenticodeSignature -LiteralPath $installer).SignerCertificate.Subject)" >> $env:GITHUB_OUTPUT
-          "signer_thumbprint=$signerThumbprint" >> $env:GITHUB_OUTPUT
-          Write-Host "Windows signature and updater manifest verified."
+          if ($requireSignature) {
+            "signer_subject=$((Get-AuthenticodeSignature -LiteralPath $installer).SignerCertificate.Subject)" >> $env:GITHUB_OUTPUT
+            "signer_thumbprint=$signerThumbprint" >> $env:GITHUB_OUTPUT
+            Write-Host "Windows signature and updater manifest verified."
+          } else {
+            "signer_subject=unsigned" >> $env:GITHUB_OUTPUT
+            "signer_thumbprint=unsigned" >> $env:GITHUB_OUTPUT
+            Write-Host "Updater manifest verified (unsigned build)."
+          }
 
       - name: Publish verified Windows artifacts
         if: matrix.platform == 'win'

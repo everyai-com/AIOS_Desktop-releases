@@ -6,7 +6,12 @@ set -euo pipefail
 : "${SIGNING_MODE:?SIGNING_MODE is required}"
 : "${GITHUB_OUTPUT:?GITHUB_OUTPUT must point to the GitHub Actions output file}"
 
-BUILD_ARGS=(--win --publish never "-c.forceCodeSigning=true")
+BUILD_ARGS=(--win --publish never)
+if [ "$SIGNING_MODE" = "unsigned" ]; then
+  BUILD_ARGS+=("-c.forceCodeSigning=false")
+else
+  BUILD_ARGS+=("-c.forceCodeSigning=true")
+fi
 case "$RELEASE_TAG" in
   *-beta*|*-rc*|*-alpha*)
     BUILD_ARGS+=("-c.publish.releaseType=prerelease" "-c.publish.channel=beta")
@@ -38,6 +43,8 @@ case "$SIGNING_MODE" in
   pfx)
     : "${CSC_LINK:?PFX certificate is required}"
     : "${CSC_KEY_PASSWORD:?PFX password is required}"
+    ;;
+  unsigned)
     ;;
   *)
     echo "::error::Unsupported Windows signing mode: $SIGNING_MODE"

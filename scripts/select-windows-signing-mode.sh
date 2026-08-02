@@ -61,7 +61,13 @@ if [ "$PFX_SET" -eq 2 ]; then
 fi
 
 if [ "$COMPLETE_MODES" -eq 0 ]; then
-  echo "::error::No trusted Windows signing identity is configured; refusing to build an unsigned public release."
+  if [ "${ALLOW_UNSIGNED_WINDOWS:-}" = "1" ]; then
+    echo "::warning::No Windows signing identity configured; ALLOW_UNSIGNED_WINDOWS=1 is set, building UNSIGNED. Users will see SmartScreen warnings."
+    echo "mode=unsigned" >> "$GITHUB_OUTPUT"
+    echo "Selected unsigned build (explicit opt-in)."
+    exit 0
+  fi
+  echo "::error::No trusted Windows signing identity is configured; refusing to build an unsigned public release. Set repo variable ALLOW_UNSIGNED_WINDOWS=1 to override."
   exit 1
 fi
 if [ "$COMPLETE_MODES" -ne 1 ]; then
