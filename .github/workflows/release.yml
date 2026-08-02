@@ -392,11 +392,20 @@ jobs:
             "$STAGE/$(basename "$MANIFEST")" \
             --clobber --repo "$REPO"
 
+          # GitHub computes an asset's digest asynchronously after upload, so a
+          # read immediately after `gh release upload` can return an empty
+          # string and fail a correct upload. Poll until the digest appears.
           for LOCAL_PATH in "$STAGE/$PUBLIC_NAME" "$STAGE/$(basename "$MANIFEST")"; do
             ASSET_NAME="$(basename "$LOCAL_PATH")"
             LOCAL_DIGEST="sha256:$(sha256sum "$LOCAL_PATH" | awk '{print $1}')"
-            REMOTE_DIGEST="$(gh release view "$TAG" --repo "$REPO" --json assets \
-              --jq ".assets[] | select(.name == \"$ASSET_NAME\") | .digest")"
+            REMOTE_DIGEST=""
+            for ATTEMPT in $(seq 1 30); do
+              REMOTE_DIGEST="$(gh release view "$TAG" --repo "$REPO" --json assets \
+                --jq ".assets[] | select(.name == \"$ASSET_NAME\") | .digest" || true)"
+              if [ -n "$REMOTE_DIGEST" ] && [ "$REMOTE_DIGEST" != "null" ]; then break; fi
+              echo "Waiting for GitHub to compute the digest of $ASSET_NAME (attempt $ATTEMPT)"
+              sleep 10
+            done
             test "$REMOTE_DIGEST" = "$LOCAL_DIGEST"
             echo "Published verified $ASSET_NAME ($REMOTE_DIGEST)"
           done
@@ -470,8 +479,16 @@ jobs:
           cp "$LOCAL_DMG" "/tmp/$PUBLIC_NAME"
           gh release upload "$TAG" "/tmp/$PUBLIC_NAME" --clobber --repo "$REPO"
           LOCAL_DIGEST="sha256:$(shasum -a 256 "/tmp/$PUBLIC_NAME" | awk '{print $1}')"
-          REMOTE_DIGEST="$(gh release view "$TAG" --repo "$REPO" --json assets \
-            --jq ".assets[] | select(.name == \"$PUBLIC_NAME\") | .digest")"
+          # GitHub computes asset digests asynchronously; poll rather than
+          # failing a correct upload that simply has not been hashed yet.
+          REMOTE_DIGEST=""
+          for ATTEMPT in $(seq 1 30); do
+            REMOTE_DIGEST="$(gh release view "$TAG" --repo "$REPO" --json assets \
+              --jq ".assets[] | select(.name == \"$PUBLIC_NAME\") | .digest" || true)"
+            if [ -n "$REMOTE_DIGEST" ] && [ "$REMOTE_DIGEST" != "null" ]; then break; fi
+            echo "Waiting for GitHub to compute the digest of $PUBLIC_NAME (attempt $ATTEMPT)"
+            sleep 10
+          done
           test "$REMOTE_DIGEST" = "$LOCAL_DIGEST"
           echo "Published final stapled $PUBLIC_NAME ($REMOTE_DIGEST)"
 
@@ -510,8 +527,12 @@ jobs:
           cd /tmp
           ARM64_ZIP="AIOS-Desktop-${VERSION}-arm64-mac.zip"
           INTEL_ZIP="AIOS-Desktop-${VERSION}-mac.zip"
-          gh release download "$TAG" --repo "$REPO" -p "$ARM64_ZIP" || { echo "::warning::arm64 zip missing, skipping merge"; exit 0; }
-          gh release download "$TAG" --repo "$REPO" -p "$INTEL_ZIP" || { echo "::warning::intel zip missing, skipping merge"; exit 0; }
+          # Never exit 0 on a missing arch. electron-builder's per-arch publish
+          # leaves behind a single-arch latest-mac.yml, so "skip the merge" ships
+          # a manifest that points Apple Silicon users at the Intel build.
+          # Failing here keeps the release an unpublished draft instead.
+          gh release download "$TAG" --repo "$REPO" -p "$ARM64_ZIP" || { echo "::error::arm64 zip missing; refusing to leave a single-arch mac manifest"; exit 1; }
+          gh release download "$TAG" --repo "$REPO" -p "$INTEL_ZIP" || { echo "::error::intel zip missing; refusing to leave a single-arch mac manifest"; exit 1; }
           ARM64_HASH=$(openssl dgst -sha512 -binary "$ARM64_ZIP" | openssl base64 -A)
           INTEL_HASH=$(openssl dgst -sha512 -binary "$INTEL_ZIP" | openssl base64 -A)
           ARM64_SIZE=$(stat -c%s "$ARM64_ZIP")
