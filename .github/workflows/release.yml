@@ -395,18 +395,31 @@ jobs:
           # GitHub computes an asset's digest asynchronously after upload, so a
           # read immediately after `gh release upload` can return an empty
           # string and fail a correct upload. Poll until the digest appears.
+          #
+          # Read it from the REST API, NOT `gh release view --json assets`. That
+          # field is not part of gh's stable asset schema: depending on the gh
+          # build on the runner it comes back empty or without the `sha256:`
+          # prefix, so the comparison below could never match a byte-perfect
+          # upload. Every release died here, and silently — a bare `test` under
+          # `set -e` exits 1 with no output at all. Hence the explicit error.
+          RELEASE_ID="$(gh api "repos/$REPO/releases?per_page=100" \
+            --jq "[.[] | select(.tag_name == \"$TAG\")][0].id")"
+          test -n "$RELEASE_ID"
           for LOCAL_PATH in "$STAGE/$PUBLIC_NAME" "$STAGE/$(basename "$MANIFEST")"; do
             ASSET_NAME="$(basename "$LOCAL_PATH")"
             LOCAL_DIGEST="sha256:$(sha256sum "$LOCAL_PATH" | awk '{print $1}')"
             REMOTE_DIGEST=""
             for ATTEMPT in $(seq 1 30); do
-              REMOTE_DIGEST="$(gh release view "$TAG" --repo "$REPO" --json assets \
-                --jq ".assets[] | select(.name == \"$ASSET_NAME\") | .digest" || true)"
-              if [ -n "$REMOTE_DIGEST" ] && [ "$REMOTE_DIGEST" != "null" ]; then break; fi
+              REMOTE_DIGEST="$(gh api "repos/$REPO/releases/$RELEASE_ID/assets?per_page=100" \
+                --jq ".[] | select(.name == \"$ASSET_NAME\") | .digest" || true)"
+              case "$REMOTE_DIGEST" in sha256:*) break ;; esac
               echo "Waiting for GitHub to compute the digest of $ASSET_NAME (attempt $ATTEMPT)"
               sleep 10
             done
-            test "$REMOTE_DIGEST" = "$LOCAL_DIGEST"
+            if [ "$REMOTE_DIGEST" != "$LOCAL_DIGEST" ]; then
+              echo "::error::$ASSET_NAME does not match the local build (local $LOCAL_DIGEST, remote ${REMOTE_DIGEST:-<none>})"
+              exit 1
+            fi
             echo "Published verified $ASSET_NAME ($REMOTE_DIGEST)"
           done
 
@@ -480,16 +493,24 @@ jobs:
           gh release upload "$TAG" "/tmp/$PUBLIC_NAME" --clobber --repo "$REPO"
           LOCAL_DIGEST="sha256:$(shasum -a 256 "/tmp/$PUBLIC_NAME" | awk '{print $1}')"
           # GitHub computes asset digests asynchronously; poll rather than
-          # failing a correct upload that simply has not been hashed yet.
+          # failing a correct upload that simply has not been hashed yet. Read
+          # via the REST API — see the Windows publish step for why gh's
+          # `--json assets` digest field cannot be trusted here.
+          RELEASE_ID="$(gh api "repos/$REPO/releases?per_page=100" \
+            --jq "[.[] | select(.tag_name == \"$TAG\")][0].id")"
+          test -n "$RELEASE_ID"
           REMOTE_DIGEST=""
           for ATTEMPT in $(seq 1 30); do
-            REMOTE_DIGEST="$(gh release view "$TAG" --repo "$REPO" --json assets \
-              --jq ".assets[] | select(.name == \"$PUBLIC_NAME\") | .digest" || true)"
-            if [ -n "$REMOTE_DIGEST" ] && [ "$REMOTE_DIGEST" != "null" ]; then break; fi
+            REMOTE_DIGEST="$(gh api "repos/$REPO/releases/$RELEASE_ID/assets?per_page=100" \
+              --jq ".[] | select(.name == \"$PUBLIC_NAME\") | .digest" || true)"
+            case "$REMOTE_DIGEST" in sha256:*) break ;; esac
             echo "Waiting for GitHub to compute the digest of $PUBLIC_NAME (attempt $ATTEMPT)"
             sleep 10
           done
-          test "$REMOTE_DIGEST" = "$LOCAL_DIGEST"
+          if [ "$REMOTE_DIGEST" != "$LOCAL_DIGEST" ]; then
+            echo "::error::$PUBLIC_NAME does not match the stapled local DMG (local $LOCAL_DIGEST, remote ${REMOTE_DIGEST:-<none>})"
+            exit 1
+          fi
           echo "Published final stapled $PUBLIC_NAME ($REMOTE_DIGEST)"
 
       - name: Upload installer artifacts (debugging)
@@ -599,7 +620,15 @@ jobs:
             "$MAC_MANIFEST"
             "$WIN_MANIFEST"
           )
-          ASSETS_JSON="$(gh release view "$TAG" --repo "$REPO" --json assets)"
+          # REST, not `gh release view --json assets` — the digest asserted below
+          # is absent from gh's asset schema on some runners, which would fail
+          # this gate on a perfectly good release. Kept in `{assets: [...]}`
+          # shape so the jq below is unchanged.
+          RELEASE_ID="$(gh api "repos/$REPO/releases?per_page=100" \
+            --jq "[.[] | select(.tag_name == \"$TAG\")][0].id")"
+          test -n "$RELEASE_ID"
+          ASSETS_JSON="$(gh api "repos/$REPO/releases/$RELEASE_ID/assets?per_page=100" \
+            --jq '{assets: .}')"
           for ASSET in "${REQUIRED_ASSETS[@]}"; do
             SIZE="$(jq -r --arg name "$ASSET" \
               '.assets[] | select(.name == $name) | .size' <<<"$ASSETS_JSON")"
