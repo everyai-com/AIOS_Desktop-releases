@@ -407,7 +407,13 @@ jobs:
           test -n "$RELEASE_ID"
           for LOCAL_PATH in "$STAGE/$PUBLIC_NAME" "$STAGE/$(basename "$MANIFEST")"; do
             ASSET_NAME="$(basename "$LOCAL_PATH")"
-            LOCAL_DIGEST="sha256:$(sha256sum "$LOCAL_PATH" | awk '{print $1}')"
+            # Read from stdin, not by filename. When the name it is given
+            # contains a backslash, sha256sum escapes the whole output line by
+            # prefixing it with one -- and every Windows $STAGE path does. That
+            # backslash rode into $1 and made the digest read
+            # "sha256:\0725f19..." against a remote "sha256:0725f19...", so the
+            # comparison below could never match and every release died here.
+            LOCAL_DIGEST="sha256:$(sha256sum < "$LOCAL_PATH" | awk '{print $1}')"
             REMOTE_DIGEST=""
             for ATTEMPT in $(seq 1 30); do
               REMOTE_DIGEST="$(gh api "repos/$REPO/releases/$RELEASE_ID/assets?per_page=100" \
@@ -491,7 +497,9 @@ jobs:
           xcrun stapler validate "$LOCAL_DMG"
           cp "$LOCAL_DMG" "/tmp/$PUBLIC_NAME"
           gh release upload "$TAG" "/tmp/$PUBLIC_NAME" --clobber --repo "$REPO"
-          LOCAL_DIGEST="sha256:$(shasum -a 256 "/tmp/$PUBLIC_NAME" | awk '{print $1}')"
+          # Read from stdin so no filename can be escaped into the digest --
+          # see the Windows publish step, where that cost us four releases.
+          LOCAL_DIGEST="sha256:$(shasum -a 256 < "/tmp/$PUBLIC_NAME" | awk '{print $1}')"
           # GitHub computes asset digests asynchronously; poll rather than
           # failing a correct upload that simply has not been hashed yet. Read
           # via the REST API — see the Windows publish step for why gh's
