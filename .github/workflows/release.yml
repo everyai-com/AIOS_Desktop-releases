@@ -219,6 +219,39 @@ jobs:
         working-directory: source
         run: arch -x86_64 ./dist/aios-host/aios-host --smoke-import
 
+      # electron-builder 26 passes the CERT password as the temp-keychain
+      # password to set-key-partition-list; current runners reject the mismatch
+      # ("SecKeychainUnlock: user name or passphrase not correct"). Import the
+      # cert here with correct password handling and hand builder the ready
+      # keychain via CSC_KEYCHAIN (it skips its own import path then).
+      - name: Import Mac signing cert (managed keychain)
+        if: matrix.platform == 'mac'
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          CSC_FILE="$RUNNER_TEMP/aios-cert.p12"
+          if [[ "$CSC_LINK" =~ ^https?:// ]]; then
+            curl -fsSL -o "$CSC_FILE" "$CSC_LINK"
+          elif [ -f "$CSC_LINK" ]; then
+            cp "$CSC_LINK" "$CSC_FILE"
+          else
+            echo "$CSC_LINK" | base64 -d > "$CSC_FILE"
+          fi
+          KC="$RUNNER_TEMP/aios-sign.keychain"
+          KCPW="$(openssl rand -base64 32)"
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          security import "$CSC_FILE" -k "$KC" -P "$CSC_KEY_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/productbuild -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KCPW" "$KC"
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          security find-identity -v -p codesigning "$KC" | head -n 5
+          rm -f "$CSC_FILE"
+          echo "CSC_KEYCHAIN=$KC" >> "$GITHUB_ENV"
+
       - name: Select Windows signing mode
         id: windows-signing-mode
         if: matrix.platform == 'win'
@@ -442,8 +475,6 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -463,8 +494,6 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
