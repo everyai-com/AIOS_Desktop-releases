@@ -193,11 +193,18 @@ jobs:
         working-directory: source
         run: |
           set -euo pipefail
-          if [ ! -x /usr/local/bin/brew ]; then
-            arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-          fi
-          arch -x86_64 /usr/local/bin/brew install flac
-          SRC=/usr/local/bin/flac
+          # No x86_64 Homebrew exists on ARM runners (Rosetta brew is refused),
+          # so fetch the Intel bottle directly (anonymous ghcr pull, no brew).
+          BOTTLE_URL=$(curl -fsSL https://formulae.brew.sh/api/formula/flac.json \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)['bottle']['stable']['files']['sonoma']['url'])")
+          GHCR_TOKEN=$(curl -fsSL "https://ghcr.io/token?scope=repository:homebrew/core/flac:pull&service=ghcr.io" \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)['token'])")
+          rm -rf /tmp/flac-intel && mkdir -p /tmp/flac-intel
+          curl -fsSL -H "Authorization: Bearer $GHCR_TOKEN" -o /tmp/flac-intel/bottle.tar.gz "$BOTTLE_URL"
+          tar -xzf /tmp/flac-intel/bottle.tar.gz -C /tmp/flac-intel
+          SRC=$(find /tmp/flac-intel -path "*/bin/flac" -type f | head -n 1)
+          [ -n "$SRC" ] || { echo "flac binary not found in bottle"; exit 1; }
+          file "$SRC" | grep -q x86_64 || { echo "bottled flac is not x86_64"; exit 1; }
           DEST=./dist/aios-host/_internal/speech_recognition/flac-mac
           cp "$SRC" "$DEST"
           chmod +x "$DEST"
